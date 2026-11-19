@@ -1,0 +1,220 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>AI Office Simulator Ultimate</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#111827;color:white;font-family:Arial;overflow:hidden}
+header{height:58px;background:#17243a;display:flex;align-items:center;justify-content:space-between;padding:0 12px;font-weight:bold}
+header small{color:#54d6ff}
+#game{display:block;width:100vw;height:calc(100dvh - 150px);touch-action:none}
+#bar{height:92px;background:#17243a;display:flex;gap:7px;align-items:center;justify-content:center;padding:8px;flex-wrap:wrap}
+button{border:1px solid #42617d;background:#243c56;color:white;border-radius:9px;padding:10px 12px;font-weight:bold}
+button.active{background:#087e9e;border-color:#54d6ff}
+#stats{display:flex;gap:12px;font-size:12px}
+#hint{position:absolute;top:65px;left:10px;background:#101c2cdd;padding:8px;border-radius:8px;font-size:11px;pointer-events:none}
+#toast{position:absolute;top:115px;left:50%;transform:translateX(-50%);background:#087e9e;padding:9px 15px;border-radius:10px;display:none}
+</style>
+</head>
+<body>
+<header>
+ <div>🏢 AI OFFICE <small>ULTIMATE</small></div>
+ <div id="stats">
+  <span>💰 $<b id="money">5000</b></span>
+  <span>👥 <b id="staff">2</b></span>
+  <span>⭐ <b id="level">1</b></span>
+ </div>
+</header>
+<div id="hint">Drag to move camera • Pinch or buttons to zoom • Select furniture then tap floor</div>
+<div id="toast"></div>
+<canvas id="game"></canvas>
+<div id="bar">
+ <button id="select" class="active">✋ Move</button>
+ <button id="desk">🖥️ Desk $300</button>
+ <button id="plant">🪴 Plant $100</button>
+ <button id="meeting">🪑 Meeting $500</button>
+ <button id="hire">👔 Hire $400</button>
+ <button id="zoomIn">＋</button>
+ <button id="zoomOut">－</button>
+ <button id="save">💾 Save</button>
+</div>
+<script>
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+let money=5000,staff=2,level=1,income=0;
+let camera={x:0,y:0,zoom:1};
+let objects=[
+ {x:0,y:0,type:"desk"},
+ {x:2,y:0,type:"desk"},
+ {x:-2,y:1,type:"plant"},
+ {x:1,y:3,type:"meeting"}
+];
+let employees=[{x:0,y:1},{x:2,y:1}];
+let mode="select",dragging=false,last={x:0,y:0},moved=false;
+let tick=0;
+
+function resize(){
+ const d=devicePixelRatio||1;
+ canvas.width=canvas.clientWidth*d;
+ canvas.height=canvas.clientHeight*d;
+ ctx.setTransform(d,0,0,d,0,0);
+ draw();
+}
+window.addEventListener("resize",resize);
+
+function project(x,y){
+ return {
+  x:canvas.clientWidth/2+camera.x+(x-y)*42*camera.zoom,
+  y:canvas.clientHeight/2+camera.y+(x+y)*21*camera.zoom
+ };
+}
+function polygon(points,color,stroke){
+ ctx.beginPath();
+ points.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));
+ ctx.closePath();ctx.fillStyle=color;ctx.fill();
+ if(stroke){ctx.strokeStyle=stroke;ctx.stroke();}
+}
+function diamond(x,y,color){
+ let p=project(x,y),w=42*camera.zoom,h=21*camera.zoom;
+ polygon([{x:p.x,y:p.y-h},{x:p.x+w,y:p.y},{x:p.x,y:p.y+h},{x:p.x-w,y:p.y}],color,"#9aabb9");
+}
+function drawDesk(o){
+ let p=project(o.x,o.y),z=camera.zoom;
+ polygon([{x:p.x-23*z,y:p.y-7*z},{x:p.x,y:p.y-19*z},{x:p.x+23*z,y:p.y-7*z},{x:p.x,y:p.y+5*z}],"#a66c43","#603e2b");
+ ctx.fillStyle="#243a50";
+ ctx.fillRect(p.x-10*z,p.y-23*z,20*z,13*z);
+ ctx.fillStyle="#43c9ec";
+ ctx.fillRect(p.x-8*z,p.y-21*z,16*z,9*z);
+}
+function drawPlant(o){
+ let p=project(o.x,o.y),z=camera.zoom;
+ ctx.fillStyle="#98613c";ctx.fillRect(p.x-8*z,p.y-7*z,16*z,13*z);
+ ctx.fillStyle="#36b66a";
+ ctx.beginPath();ctx.arc(p.x,p.y-16*z,12*z,0,Math.PI*2);ctx.fill();
+}
+function drawMeeting(o){
+ let p=project(o.x,o.y),z=camera.zoom;
+ polygon([{x:p.x-30*z,y:p.y-8*z},{x:p.x,y:p.y-24*z},{x:p.x+30*z,y:p.y-8*z},{x:p.x,y:p.y+8*z}],"#77523b");
+}
+function drawEmployee(e,i){
+ let p=project(e.x,e.y),z=camera.zoom;
+ ctx.fillStyle="#243d69";
+ ctx.beginPath();ctx.ellipse(p.x,p.y-12*z,9*z,13*z,0,0,Math.PI*2);ctx.fill();
+ ctx.fillStyle="#e7b88c";
+ ctx.beginPath();ctx.arc(p.x,p.y-27*z,7*z,0,Math.PI*2);ctx.fill();
+ ctx.fillStyle="white";ctx.font=`${9*z}px Arial`;ctx.textAlign="center";
+ ctx.fillText("👔",p.x,p.y-10*z);
+}
+function draw(){
+ if(!ctx)return;
+ const w=canvas.clientWidth,h=canvas.clientHeight;
+ ctx.clearRect(0,0,w,h);
+ ctx.fillStyle="#dce6ee";ctx.fillRect(0,0,w,h);
+ // Office floor
+ for(let x=-10;x<=10;x++){
+  for(let y=-8;y<=8;y++){
+   diamond(x,y,(x+y)%2===0?"#d7e2e9":"#cbd9e2");
+  }
+ }
+ // walls and windows
+ let a=project(-9,-8),b=project(9,-8),c=project(-9,8);
+ polygon([{x:a.x,y:a.y},{x:b.x,y:b.y},{x:b.x,y:b.y-65*camera.zoom},{x:a.x,y:a.y-65*camera.zoom}],"#718ca4");
+ polygon([{x:a.x,y:a.y},{x:c.x,y:c.y},{x:c.x,y:c.y-65*camera.zoom},{x:a.x,y:a.y-65*camera.zoom}],"#8ba4b8");
+ // window strip
+ for(let i=0;i<5;i++){
+  let p=project(-7+i*3,-8);
+  ctx.fillStyle="#7dd8ef";
+  ctx.fillRect(p.x-24*camera.zoom,p.y-52*camera.zoom,42*camera.zoom,35*camera.zoom);
+ }
+ // objects sorted by depth
+ let all=[...objects.map(o=>({...o,kind:"object"})),...employees.map(e=>({...e,kind:"employee"}))];
+ all.sort((a,b)=>(a.x+a.y)-(b.x+b.y));
+ for(const o of all){
+  if(o.kind==="employee")drawEmployee(o);
+  else if(o.type==="desk")drawDesk(o);
+  else if(o.type==="plant")drawPlant(o);
+  else drawMeeting(o);
+ }
+ ctx.fillStyle="#19344b";ctx.font="bold 16px Arial";ctx.textAlign="center";
+ let sign=project(0,-7);
+ ctx.fillText("AI OFFICE HEADQUARTERS",sign.x,sign.y-70*camera.zoom);
+}
+function toast(s){
+ const t=document.getElementById("toast");
+ t.textContent=s;t.style.display="block";
+ setTimeout(()=>t.style.display="none",1800);
+}
+function updateStats(){
+ document.getElementById("money").textContent=Math.floor(money);
+ document.getElementById("staff").textContent=staff;
+ document.getElementById("level").textContent=level;
+}
+function setMode(m){
+ mode=m;
+ document.querySelectorAll("#bar button").forEach(b=>b.classList.remove("active"));
+ document.getElementById(m).classList.add("active");
+}
+function screenToGrid(sx,sy){
+ let px=(sx-canvas.clientWidth/2-camera.x)/(42*camera.zoom);
+ let py=(sy-canvas.clientHeight/2-camera.y)/(21*camera.zoom);
+ return {x:Math.round((px+py)/2),y:Math.round((py-px)/2)};
+}
+canvas.addEventListener("pointerdown",e=>{
+ dragging=true;moved=false;last={x:e.clientX,y:e.clientY};
+ canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener("pointermove",e=>{
+ if(!dragging)return;
+ let dx=e.clientX-last.x,dy=e.clientY-last.y;
+ if(Math.abs(dx)+Math.abs(dy)>3)moved=true;
+ if(mode==="select"||moved){
+  camera.x+=dx;camera.y+=dy;draw();
+ }
+ last={x:e.clientX,y:e.clientY};
+});
+canvas.addEventListener("pointerup",e=>{
+ if(!dragging)return;
+ dragging=false;
+ if(!moved&&mode!=="select"){
+  const r=canvas.getBoundingClientRect();
+  const g=screenToGrid(e.clientX-r.left,e.clientY-r.top);
+  const costs={desk:300,plant:100,meeting:500};
+  if(money>=costs[mode]){
+   money-=costs[mode];objects.push({x:g.x,y:g.y,type:mode});
+   toast("Furniture added!");
+  }else toast("Not enough money!");
+  updateStats();draw();
+ }
+});
+document.getElementById("select").onclick=()=>setMode("select");
+["desk","plant","meeting"].forEach(id=>document.getElementById(id).onclick=()=>setMode(id));
+document.getElementById("hire").onclick=()=>{
+ if(money>=400){money-=400;staff++;employees.push({x:Math.floor(Math.random()*5)-2,y:2});updateStats();draw();toast("New employee hired!");}
+ else toast("Not enough money!");
+};
+document.getElementById("zoomIn").onclick=()=>{camera.zoom=Math.min(2,camera.zoom+0.15);draw()};
+document.getElementById("zoomOut").onclick=()=>{camera.zoom=Math.max(.5,camera.zoom-.15);draw()};
+document.getElementById("save").onclick=()=>{
+ localStorage.setItem("aioffice_save",JSON.stringify({money,staff,level,objects,employees}));
+ toast("Game saved!");
+};
+function load(){
+ try{
+  let s=JSON.parse(localStorage.getItem("aioffice_save"));
+  if(s){money=s.money;staff=s.staff;level=s.level;objects=s.objects;employees=s.employees;}
+ }catch(e){}
+ updateStats();
+}
+setInterval(()=>{
+ money+=staff*5;
+ income+=staff*5;
+ if(income>=1000){level++;income=0;toast("Company level increased!");}
+ updateStats();draw();
+},10000);
+load();resize();
+</script>
+</body>
+</html>
